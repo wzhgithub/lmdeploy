@@ -18,3 +18,4 @@ torchvision<=0.17.2,>=0.15.0
 transformers
 triton>=2.1.0,<=2.2.0; sys_platform == "linux"
 uvicorn
+python-json-logger
