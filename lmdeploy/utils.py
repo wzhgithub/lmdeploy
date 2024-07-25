@@ -131,11 +131,12 @@ def get_logger(
         file_handler = TimedRotatingFileHandler(filename=log_file, backupCount=24)
         handlers.append(file_handler)
 
-    formatter = ColorFormatter(log_formatter)
+    formatter = logging.Formatter(fmt=log_formatter)
     for handler in handlers:
         if isinstance(handler, TimedRotatingFileHandler):
             from pythonjsonlogger.jsonlogger import JsonFormatter
-            handler.setFormatter(JsonFormatter(rename_fields={"asctime":"logtime", "levelname":"level"}))
+            jf = JsonFormatter(fmt=log_formatter, rename_fields={"asctime":"logtime", "levelname":"level"})
+            handler.setFormatter(jf)
             handler.setLevel(logging.INFO)
         else:                
             handler.setFormatter(formatter)
