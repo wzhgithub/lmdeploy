@@ -119,17 +119,26 @@ def get_logger(
     stream_handler = logging.StreamHandler(stream=sys.stdout)
     handlers = [stream_handler]
 
+    if log_file is None:
+        import os
+        log_file = os.environ.get('LOG_FILE', None)
+
     if log_file is not None:
         # Here, the default behaviour of the official logger is 'a'. Thus, we
         # provide an interface to change the file mode to the default
         # behaviour.
-        file_handler = logging.FileHandler(log_file, file_mode)
+        file_handler = logging.handlers.TimedRotatingFileHandler(filename=log_file, backupCount=24)
         handlers.append(file_handler)
 
     formatter = ColorFormatter(log_formatter)
     for handler in handlers:
-        handler.setFormatter(formatter)
-        handler.setLevel(logging.DEBUG)
+        if isinstance(handler, logging.handlers.TimedRotatingFileHandler):
+            from pythonjsonlogger.jsonlogger import JsonFormatter
+            handler.setFormatter(JsonFormatter(rename_fields={"asctime":"logtime", "levelname":"level"}))
+            handler.setLevel(logging.INFO)
+        else:                
+            handler.setFormatter(formatter)
+            handler.setLevel(logging.DEBUG)
         handler.addFilter(FilterDuplicateWarning(name))
         logger.addHandler(handler)
 
