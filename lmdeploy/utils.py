@@ -12,6 +12,7 @@ from typing import List, Optional, TypeVar, Union
 
 from huggingface_hub import hf_hub_download
 from transformers import PretrainedConfig
+from logging.handlers import TimedRotatingFileHandler
 
 logger_initialized = {}
 
@@ -127,12 +128,12 @@ def get_logger(
         # Here, the default behaviour of the official logger is 'a'. Thus, we
         # provide an interface to change the file mode to the default
         # behaviour.
-        file_handler = logging.handlers.TimedRotatingFileHandler(filename=log_file, backupCount=24)
+        file_handler = TimedRotatingFileHandler(filename=log_file, backupCount=24)
         handlers.append(file_handler)
 
     formatter = ColorFormatter(log_formatter)
     for handler in handlers:
-        if isinstance(handler, logging.handlers.TimedRotatingFileHandler):
+        if isinstance(handler, TimedRotatingFileHandler):
             from pythonjsonlogger.jsonlogger import JsonFormatter
             handler.setFormatter(JsonFormatter(rename_fields={"asctime":"logtime", "levelname":"level"}))
             handler.setLevel(logging.INFO)

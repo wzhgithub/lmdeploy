@@ -6,9 +6,11 @@ RUN rm /etc/apt/sources.list.d/cuda*.list && apt-get update && apt-get install -
 
 ENV PATH=/opt/py38/bin:$PATH
 
-RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools==69.5.1 \
+RUN --mount=type=cache,target=/root/.cache \
+    python3 -m pip install --no-cache-dir --upgrade pip setuptools==69.5.1 \
     torch==2.1.0 torchvision==0.16.0 \
-    cmake packaging wheel -i https://mirrors.cloud.tencent.com/pypi/simple --extra-index-url https://download.pytorch.org/whl/cu118
+    cmake packaging wheel -i https://mirrors.cloud.tencent.com/pypi/simple 
+    # --extra-index-url https://download.pytorch.org/whl/cu118
 
 ENV NCCL_LAUNCH_MODE=GROUP
 
@@ -17,7 +19,8 @@ COPY . /opt/lmdeploy
 
 WORKDIR /opt/lmdeploy
 
-RUN cd /opt/lmdeploy &&\
+RUN --mount=type=cache,target=/root/.cache \
+    cd /opt/lmdeploy &&\
     python3 -m pip install --no-cache-dir -r requirements.txt -i https://mirrors.cloud.tencent.com/pypi/simple &&\
     mkdir -p build && cd build &&\
     cmake .. \
