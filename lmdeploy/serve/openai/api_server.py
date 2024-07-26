@@ -32,6 +32,7 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
+from prometheus_client import make_asgi_app, Summary
 
 logger = get_logger('lmdeploy')
 
@@ -45,7 +46,18 @@ class VariableInterface:
     request_hosts = []
 
 
-app = FastAPI(docs_url='/')
+app = FastAPI(debug=False)
+metrics_app = make_asgi_app()
+app.mount("/metrics/", metrics_app, name="metrics")
+
+
+CHAT_COMPLETION_GENERATE_LATENCY = Summary(name="chat_completion_generate_latency_seconds",
+                                           documentation="Chat completion generate latency in seconds",
+                                           labelnames=["model_name"])
+
+CHAT_COMPLETION_REQUEST_LATENCY = Summary(name="chat_completion_request_latency_seconds",
+                                          documentation="Chat completion request latency in seconds")
+
 get_bearer_token = HTTPBearer(auto_error=False)
 
 
@@ -369,6 +381,7 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
     return response
 
 
+@CHAT_COMPLETION_REQUEST_LATENCY.time()
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest,
                               raw_request: Request = None):
@@ -526,20 +539,22 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     final_token_ids = []
     final_res = None
     text = ''
-    async for res in result_generator:
-        if await raw_request.is_disconnected():
-            # Abort the request if the client disconnects.
-            await VariableInterface.async_engine.stop_session(
-                request.session_id)
-            return create_error_response(HTTPStatus.BAD_REQUEST,
-                                         'Client disconnected')
-        final_res = res
-        text += res.response
-        if res.token_ids:
-            final_token_ids.extend(res.token_ids)
-        if res.logprobs:
-            final_logprobs.extend(res.logprobs)
 
+    with CHAT_COMPLETION_GENERATE_LATENCY.labels(request.model).time():
+        async for res in result_generator:
+            if await raw_request.is_disconnected():
+                # Abort the request if the client disconnects.
+                await VariableInterface.async_engine.stop_session(
+                    request.session_id)
+                return create_error_response(HTTPStatus.BAD_REQUEST,
+                                             'Client disconnected')
+            final_res = res
+            text += res.response
+            if res.token_ids:
+                final_token_ids.extend(res.token_ids)
+            if res.logprobs:
+                final_logprobs.extend(res.logprobs)
+    
     tool_calls = None
     if request.tool_choice != 'none' and '<|plugin|>' in text:
         if final_res.finish_reason == 'stop':
@@ -1263,7 +1278,7 @@ def serve(model_path: str,
             a single api_key. Default to None, which means no api key applied.
         ssl (bool): Enable SSL. Requires OS Environment variables 'SSL_KEYFILE' and 'SSL_CERTFILE'.
         qos_config_path (str): qos policy config path
-    """ # noqa E501
+    """  # noqa E501
     if os.getenv('TM_LOG_LEVEL') is None:
         os.environ['TM_LOG_LEVEL'] = log_level
     logger.setLevel(log_level)
