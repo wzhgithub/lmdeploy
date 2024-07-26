@@ -381,7 +381,6 @@ async def chat_completions_v1_qos(request: ChatCompletionRequestQos,
     return response
 
 
-@CHAT_COMPLETION_REQUEST_LATENCY.time()
 @app.post('/v1/chat/completions', dependencies=[Depends(check_api_key)])
 async def chat_completions_v1(request: ChatCompletionRequest,
                               raw_request: Request = None):
@@ -429,192 +428,193 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    if request.session_id == -1:
-        VariableInterface.session_id += 1
-        request.session_id = VariableInterface.session_id
-    error_check_ret = await check_request(request)
-    if error_check_ret is not None:
-        return error_check_ret
-    if VariableInterface.async_engine.id2step.get(str(request.session_id),
-                                                  0) != 0:
-        return create_error_response(
-            HTTPStatus.BAD_REQUEST,
-            f'The session_id `{request.session_id}` is occupied.')
+    with CHAT_COMPLETION_REQUEST_LATENCY.time():
+        if request.session_id == -1:
+            VariableInterface.session_id += 1
+            request.session_id = VariableInterface.session_id
+        error_check_ret = await check_request(request)
+        if error_check_ret is not None:
+            return error_check_ret
+        if VariableInterface.async_engine.id2step.get(str(request.session_id),
+                                                      0) != 0:
+            return create_error_response(
+                HTTPStatus.BAD_REQUEST,
+                f'The session_id `{request.session_id}` is occupied.')
 
-    model_name = request.model
-    adapter_name = None
-    if model_name != VariableInterface.async_engine.model_name:
-        adapter_name = model_name  # got a adapter name
-    request_id = str(request.session_id)
-    created_time = int(time.time())
+        model_name = request.model
+        adapter_name = None
+        if model_name != VariableInterface.async_engine.model_name:
+            adapter_name = model_name  # got a adapter name
+        request_id = str(request.session_id)
+        created_time = int(time.time())
 
-    if isinstance(request.stop, str):
-        request.stop = [request.stop]
+        if isinstance(request.stop, str):
+            request.stop = [request.stop]
 
-    gen_logprobs = None
-    if request.logprobs and request.top_logprobs:
-        gen_logprobs = request.top_logprobs
+        gen_logprobs = None
+        if request.logprobs and request.top_logprobs:
+            gen_logprobs = request.top_logprobs
 
-    gen_config = GenerationConfig(
-        max_new_tokens=request.max_tokens,
-        logprobs=gen_logprobs,
-        top_k=request.top_k,
-        top_p=request.top_p,
-        temperature=request.temperature,
-        repetition_penalty=request.repetition_penalty,
-        ignore_eos=request.ignore_eos,
-        stop_words=request.stop,
-        skip_special_tokens=request.skip_special_tokens)
+        gen_config = GenerationConfig(
+            max_new_tokens=request.max_tokens,
+            logprobs=gen_logprobs,
+            top_k=request.top_k,
+            top_p=request.top_p,
+            temperature=request.temperature,
+            repetition_penalty=request.repetition_penalty,
+            ignore_eos=request.ignore_eos,
+            stop_words=request.stop,
+            skip_special_tokens=request.skip_special_tokens)
 
-    tools = None
-    if request.tools and request.tool_choice != 'none':
-        gen_config.skip_special_tokens = False
-        if request.stream is True:
-            logger.warning('Set stream to False for tools')
-            request.stream = False
-        # internlm2 only uses contents inside function regardless of 'type'
-        if not isinstance(request.tool_choice, str):
-            tools = [
-                item.function.model_dump() for item in request.tools
-                if item.function.name == request.tool_choice.function.name
-            ]
-        else:
-            tools = [item.function.model_dump() for item in request.tools]
-    result_generator = VariableInterface.async_engine.generate(
-        request.messages,
-        request.session_id,
-        gen_config=gen_config,
-        tools=tools,
-        stream_response=True,  # always use stream to enable batching
-        sequence_start=True,
-        sequence_end=True,
-        do_preprocess=not isinstance(request.messages,
-                                     str),  # text completion for string input
-        adapter_name=adapter_name,
-    )
+        tools = None
+        if request.tools and request.tool_choice != 'none':
+            gen_config.skip_special_tokens = False
+            if request.stream is True:
+                logger.warning('Set stream to False for tools')
+                request.stream = False
+            # internlm2 only uses contents inside function regardless of 'type'
+            if not isinstance(request.tool_choice, str):
+                tools = [
+                    item.function.model_dump() for item in request.tools
+                    if item.function.name == request.tool_choice.function.name
+                ]
+            else:
+                tools = [item.function.model_dump() for item in request.tools]
+        result_generator = VariableInterface.async_engine.generate(
+            request.messages,
+            request.session_id,
+            gen_config=gen_config,
+            tools=tools,
+            stream_response=True,  # always use stream to enable batching
+            sequence_start=True,
+            sequence_end=True,
+            do_preprocess=not isinstance(request.messages,
+                                         str),  # text completion for string input
+            adapter_name=adapter_name,
+        )
 
-    def create_stream_response_json(
-            index: int,
-            text: str,
-            finish_reason: Optional[str] = None,
-            logprobs: Optional[LogProbs] = None) -> str:
-        choice_data = ChatCompletionResponseStreamChoice(
-            index=index,
-            delta=DeltaMessage(role='assistant', content=text),
-            finish_reason=finish_reason,
-            logprobs=logprobs)
-        response = ChatCompletionStreamResponse(
+        def create_stream_response_json(
+                index: int,
+                text: str,
+                finish_reason: Optional[str] = None,
+                logprobs: Optional[LogProbs] = None) -> str:
+            choice_data = ChatCompletionResponseStreamChoice(
+                index=index,
+                delta=DeltaMessage(role='assistant', content=text),
+                finish_reason=finish_reason,
+                logprobs=logprobs)
+            response = ChatCompletionStreamResponse(
+                id=request_id,
+                created=created_time,
+                model=model_name,
+                choices=[choice_data],
+            )
+            response_json = response.model_dump_json()
+
+            return response_json
+
+        async def completion_stream_generator() -> AsyncGenerator[str, None]:
+            async for res in result_generator:
+                logprobs = None
+                if gen_logprobs and res.logprobs:
+                    logprobs = _create_chat_completion_logprobs(
+                        VariableInterface.async_engine.tokenizer, res.token_ids,
+                        res.logprobs)
+
+                response_json = create_stream_response_json(
+                    index=0,
+                    text=res.response,
+                    finish_reason=res.finish_reason,
+                    logprobs=logprobs)
+                yield f'data: {response_json}\n\n'
+            yield 'data: [DONE]\n\n'
+
+        # Streaming response
+        if request.stream:
+            return StreamingResponse(completion_stream_generator(),
+                                     media_type='text/event-stream')
+
+        # Non-streaming response
+        final_logprobs = []
+        final_token_ids = []
+        final_res = None
+        text = ''
+
+        with CHAT_COMPLETION_GENERATE_LATENCY.labels(request.model).time():
+            async for res in result_generator:
+                if await raw_request.is_disconnected():
+                    # Abort the request if the client disconnects.
+                    await VariableInterface.async_engine.stop_session(
+                        request.session_id)
+                    return create_error_response(HTTPStatus.BAD_REQUEST,
+                                                 'Client disconnected')
+                final_res = res
+                text += res.response
+                if res.token_ids:
+                    final_token_ids.extend(res.token_ids)
+                if res.logprobs:
+                    final_logprobs.extend(res.logprobs)
+
+        tool_calls = None
+        if request.tool_choice != 'none' and '<|plugin|>' in text:
+            if final_res.finish_reason == 'stop':
+                final_res.finish_reason = 'tool_calls'
+            # TODO may move to generate function
+            text, action = text.split('<|action_start|><|plugin|>')
+            action = action.split('<|action_end|>'.strip())[0]
+            action = action[action.find('{'):]
+            try:  # TODO add json_schema guidance to turbomind
+                action = json.loads(action)
+                action_id = [tool.function.name
+                             for tool in request.tools].index(action['name'])
+                tool_calls = [
+                    ToolCall(id=str(action_id),
+                             function=FunctionResponse(name=action['name'],
+                                                       arguments=json.dumps(
+                                 action['parameters'])))
+                ]
+            except Exception as e:
+                logger.error(f'Exception: {e}')
+                return create_error_response(
+                    HTTPStatus.BAD_REQUEST,
+                    'Failed to parse fc related info to json format!')
+
+        logprobs = None
+        if gen_logprobs and len(final_logprobs):
+            logprobs = _create_chat_completion_logprobs(
+                VariableInterface.async_engine.tokenizer, final_token_ids,
+                final_logprobs)
+
+        assert final_res is not None
+        choices = []
+        choice_data = ChatCompletionResponseChoice(
+            index=0,
+            message=ChatMessage(role='assistant',
+                                content=text,
+                                tool_calls=tool_calls),
+            logprobs=logprobs,
+            finish_reason=final_res.finish_reason,
+        )
+        choices.append(choice_data)
+
+        total_tokens = sum([
+            final_res.history_token_len, final_res.input_token_len,
+            final_res.generate_token_len
+        ])
+        usage = UsageInfo(
+            prompt_tokens=final_res.input_token_len,
+            completion_tokens=final_res.generate_token_len,
+            total_tokens=total_tokens,
+        )
+        response = ChatCompletionResponse(
             id=request_id,
             created=created_time,
             model=model_name,
-            choices=[choice_data],
+            choices=choices,
+            usage=usage,
         )
-        response_json = response.model_dump_json()
 
-        return response_json
-
-    async def completion_stream_generator() -> AsyncGenerator[str, None]:
-        async for res in result_generator:
-            logprobs = None
-            if gen_logprobs and res.logprobs:
-                logprobs = _create_chat_completion_logprobs(
-                    VariableInterface.async_engine.tokenizer, res.token_ids,
-                    res.logprobs)
-
-            response_json = create_stream_response_json(
-                index=0,
-                text=res.response,
-                finish_reason=res.finish_reason,
-                logprobs=logprobs)
-            yield f'data: {response_json}\n\n'
-        yield 'data: [DONE]\n\n'
-
-    # Streaming response
-    if request.stream:
-        return StreamingResponse(completion_stream_generator(),
-                                 media_type='text/event-stream')
-
-    # Non-streaming response
-    final_logprobs = []
-    final_token_ids = []
-    final_res = None
-    text = ''
-
-    with CHAT_COMPLETION_GENERATE_LATENCY.labels(request.model).time():
-        async for res in result_generator:
-            if await raw_request.is_disconnected():
-                # Abort the request if the client disconnects.
-                await VariableInterface.async_engine.stop_session(
-                    request.session_id)
-                return create_error_response(HTTPStatus.BAD_REQUEST,
-                                             'Client disconnected')
-            final_res = res
-            text += res.response
-            if res.token_ids:
-                final_token_ids.extend(res.token_ids)
-            if res.logprobs:
-                final_logprobs.extend(res.logprobs)
-    
-    tool_calls = None
-    if request.tool_choice != 'none' and '<|plugin|>' in text:
-        if final_res.finish_reason == 'stop':
-            final_res.finish_reason = 'tool_calls'
-        # TODO may move to generate function
-        text, action = text.split('<|action_start|><|plugin|>')
-        action = action.split('<|action_end|>'.strip())[0]
-        action = action[action.find('{'):]
-        try:  # TODO add json_schema guidance to turbomind
-            action = json.loads(action)
-            action_id = [tool.function.name
-                         for tool in request.tools].index(action['name'])
-            tool_calls = [
-                ToolCall(id=str(action_id),
-                         function=FunctionResponse(name=action['name'],
-                                                   arguments=json.dumps(
-                                                       action['parameters'])))
-            ]
-        except Exception as e:
-            logger.error(f'Exception: {e}')
-            return create_error_response(
-                HTTPStatus.BAD_REQUEST,
-                'Failed to parse fc related info to json format!')
-
-    logprobs = None
-    if gen_logprobs and len(final_logprobs):
-        logprobs = _create_chat_completion_logprobs(
-            VariableInterface.async_engine.tokenizer, final_token_ids,
-            final_logprobs)
-
-    assert final_res is not None
-    choices = []
-    choice_data = ChatCompletionResponseChoice(
-        index=0,
-        message=ChatMessage(role='assistant',
-                            content=text,
-                            tool_calls=tool_calls),
-        logprobs=logprobs,
-        finish_reason=final_res.finish_reason,
-    )
-    choices.append(choice_data)
-
-    total_tokens = sum([
-        final_res.history_token_len, final_res.input_token_len,
-        final_res.generate_token_len
-    ])
-    usage = UsageInfo(
-        prompt_tokens=final_res.input_token_len,
-        completion_tokens=final_res.generate_token_len,
-        total_tokens=total_tokens,
-    )
-    response = ChatCompletionResponse(
-        id=request_id,
-        created=created_time,
-        model=model_name,
-        choices=choices,
-        usage=usage,
-    )
-
-    return response
+        return response
 
 
 @app.post('/v1/completions_qos')

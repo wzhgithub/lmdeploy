@@ -83,7 +83,7 @@ def get_logger(
     log_file: Optional[str] = None,
     log_level: int = logging.INFO,
     file_mode: str = 'w',
-    log_formatter: str = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    log_formatter: str = '%(levelname)s %(asctime)s %(name)s %(funcName)s %(filename)s:%(lineno)d] %(message)s'
 ) -> Logger:
     """Initialize and get a logger by name.
 
@@ -121,7 +121,6 @@ def get_logger(
     handlers = [stream_handler]
 
     if log_file is None:
-        import os
         log_file = os.environ.get('LOG_FILE', None)
 
     if log_file is not None:
