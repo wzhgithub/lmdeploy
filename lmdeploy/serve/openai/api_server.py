@@ -32,7 +32,7 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
 from lmdeploy.serve.qos_engine.qos_engine import QosEngine
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
-from prometheus_client import make_asgi_app, Summary
+from prometheus_client import make_asgi_app, Histogram, Counter, Gauge
 
 logger = get_logger('lmdeploy')
 
@@ -50,13 +50,45 @@ app = FastAPI(debug=False)
 metrics_app = make_asgi_app()
 app.mount("/metrics/", metrics_app, name="metrics")
 
+BUCKETS = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
 
-CHAT_COMPLETION_GENERATE_LATENCY = Summary(name="chat_completion_generate_latency_seconds",
-                                           documentation="Chat completion generate latency in seconds",
-                                           labelnames=["model_name"])
+E2E_GENERATE_LATENCY = Histogram(
+    name="lmdeploy:e2e_generate_latency_seconds",
+    documentation="Histogram of end to end generate latency in seconds",
+    labelnames=["model_name", "mode"],
+    buckets=BUCKETS
+)
 
-CHAT_COMPLETION_REQUEST_LATENCY = Summary(name="chat_completion_request_latency_seconds",
-                                          documentation="Chat completion request latency in seconds")
+E2E_REQUEST_LATENCY = Histogram(
+    name="lmdeploy:e2e_request_latency_seconds",
+    documentation="Histogram of end to end request latency in seconds.",
+    labelnames=["model_name", "mode"],
+    buckets=BUCKETS
+)
+
+GENERATED_TOKENS_COUNT = Counter(
+    name="lmdeploy:generation_tokens_total",
+    documentation="Number of generation tokens processed.",
+    labelnames=["model_name"],
+)
+
+PROMPT_TOKENS_COUNT = Counter(
+    name="lmdeploy:prompt_tokens_total",
+    documentation="Number of prompt tokens processed.",
+    labelnames=["model_name"]
+)
+
+FINISH_REASON_COUNT = Counter(
+    name="lmdeploy:request_success_total",
+    documentation="Number of requests finished with success.",
+    labelnames=["model_name", "finished_reason"]
+)
+
+REQUEST_STATUS_GAUGE = Gauge(
+    name="lmdeploy:request_status",
+    documentation="Number of requests in special status.",
+    labelnames=["model_name", "status"]
+)
 
 get_bearer_token = HTTPBearer(auto_error=False)
 
@@ -428,20 +460,23 @@ async def chat_completions_v1(request: ChatCompletionRequest,
     - presence_penalty (replaced with repetition_penalty)
     - frequency_penalty (replaced with repetition_penalty)
     """
-    with CHAT_COMPLETION_REQUEST_LATENCY.time():
+    model_name = request.model
+    with E2E_REQUEST_LATENCY.labels(model_name, "chat").time():
         if request.session_id == -1:
             VariableInterface.session_id += 1
             request.session_id = VariableInterface.session_id
         error_check_ret = await check_request(request)
         if error_check_ret is not None:
+            FINISH_REASON_COUNT.labels(model_name, f"{error_check_ret.status_code}").inc()
             return error_check_ret
         if VariableInterface.async_engine.id2step.get(str(request.session_id),
                                                       0) != 0:
+            FINISH_REASON_COUNT.labels(model_name, f"{HTTPStatus.BAD_REQUEST.name}").inc()
             return create_error_response(
                 HTTPStatus.BAD_REQUEST,
                 f'The session_id `{request.session_id}` is occupied.')
 
-        model_name = request.model
+        REQUEST_STATUS_GAUGE.labels(model_name, "RUNNING").set(len(VariableInterface.async_engine.running_session_ids))
         adapter_name = None
         if model_name != VariableInterface.async_engine.model_name:
             adapter_name = model_name  # got a adapter name
@@ -540,7 +575,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
         final_res = None
         text = ''
 
-        with CHAT_COMPLETION_GENERATE_LATENCY.labels(request.model).time():
+        with E2E_GENERATE_LATENCY.labels(model_name, "chat").time():
             async for res in result_generator:
                 if await raw_request.is_disconnected():
                     # Abort the request if the client disconnects.
@@ -586,6 +621,8 @@ async def chat_completions_v1(request: ChatCompletionRequest,
                 final_logprobs)
 
         assert final_res is not None
+        GENERATED_TOKENS_COUNT.labels(model_name).inc(final_res.generate_token_len)
+        PROMPT_TOKENS_COUNT.labels(model_name).inc(final_res.input_token_len)
         choices = []
         choice_data = ChatCompletionResponseChoice(
             index=0,
@@ -613,7 +650,7 @@ async def chat_completions_v1(request: ChatCompletionRequest,
             choices=choices,
             usage=usage,
         )
-
+        FINISH_REASON_COUNT.labels(model_name, final_res.finish_reason).inc()
         return response
 
 
