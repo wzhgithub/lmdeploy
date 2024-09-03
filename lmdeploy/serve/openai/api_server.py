@@ -18,6 +18,7 @@ from lmdeploy.messages import (GenerationConfig, LogitsProcessor,
                                PytorchEngineConfig, TurbomindEngineConfig)
 from lmdeploy.model import ChatTemplateConfig
 from lmdeploy.serve.async_engine import AsyncEngine
+from lmdeploy.serve.metrics import metrics
 from lmdeploy.serve.openai.protocol import (  # noqa: E501
     ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
@@ -31,8 +32,6 @@ from lmdeploy.serve.openai.protocol import (  # noqa: E501
 from lmdeploy.tokenizer import DetokenizeState, Tokenizer
 from lmdeploy.utils import get_logger
 
-from lmdeploy.serve.metrics import metrics
-
 logger = get_logger('lmdeploy')
 
 
@@ -44,8 +43,9 @@ class VariableInterface:
     request_hosts = []
 
 
-app = FastAPI(docs_url='/')
+app = FastAPI(docs_url='/docs')
 get_bearer_token = HTTPBearer(auto_error=False)
+app.mount(path="/metrics", app=metrics.metrics_app, name="metrics")
 
 
 async def check_api_key(
