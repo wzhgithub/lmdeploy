@@ -1,13 +1,12 @@
-FROM ncr.nioint.com/docker.io/openmmlab/lmdeploy:v0.5.3-cu12
+FROM adas-img.nioint.com/aigc/lmdeploy:0.5.3-cu12.2-loging-metric
 
 # Should be in the lmdeploy root directory when building docker image
 COPY . /opt/lmdeploy
 
 WORKDIR /opt/lmdeploy
-ENV https_proxy=http://proxy.nioint.com:8080
 
 RUN --mount=type=cache,target=/root/.cache/pip cd /opt/lmdeploy &&\
-    python3 -m pip install -r requirements.txt &&\
+    python3 -m pip install -r requirements.txt -i https://mirrors.cloud.tencent.com/pypi/simple &&\
     mkdir -p build && cd build &&\
     sh ../generate.sh &&\
     ninja -j$(nproc) && ninja install &&\
