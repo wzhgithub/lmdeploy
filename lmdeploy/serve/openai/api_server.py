@@ -243,7 +243,7 @@ async def health() -> Response:
 
 # modified from https://github.com/vllm-project/vllm/blob/v0.5.4/vllm/entrypoints/openai/logits_processors.py#L51  # noqa
 def logit_bias_logits_processor(logit_bias: Union[Dict[int, float],
-Dict[str, float]],
+                                                  Dict[str, float]],
                                 tokenizer) -> LogitsProcessor:
     try:
         # Convert token_id to integer
@@ -921,7 +921,7 @@ def serve(model_path: str,
           model_name: Optional[str] = None,
           backend: Literal['turbomind', 'pytorch'] = 'turbomind',
           backend_config: Optional[Union[PytorchEngineConfig,
-          TurbomindEngineConfig]] = None,
+                                         TurbomindEngineConfig]] = None,
           chat_template_config: Optional[ChatTemplateConfig] = None,
           server_name: str = '0.0.0.0',
           server_port: int = 23333,
